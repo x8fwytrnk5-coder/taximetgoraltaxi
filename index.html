@@ -3,28 +3,65 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Taxi kalkulačka</title>
+<title>Taxi – kalkulačka nákladov</title>
+
 <style>
-body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f2f2f2;margin:0;padding:12px;}
-h1{text-align:center;}
-.card{background:white;padding:14px;border-radius:12px;margin-bottom:12px;}
-label{font-weight:600;margin-top:10px;display:block;}
-input,button{width:100%;padding:12px;font-size:16px;margin-top:6px;}
-button{background:#007aff;color:white;border:none;border-radius:10px;}
-iframe{width:100%;height:260px;border:none;border-radius:12px;}
-.result{font-size:18px;font-weight:bold;}
-.green{color:green;}
-.red{color:red;}
+body {
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  background:#f2f2f2;
+  margin:0;
+  padding:12px;
+}
+h1 { text-align:center; }
+.card {
+  background:#fff;
+  padding:14px;
+  border-radius:12px;
+  margin-bottom:12px;
+}
+label {
+  font-weight:600;
+  margin-top:10px;
+  display:block;
+}
+input, button {
+  width:100%;
+  padding:12px;
+  font-size:16px;
+  margin-top:6px;
+}
+button {
+  background:#007aff;
+  color:#fff;
+  border:none;
+  border-radius:10px;
+}
+button.secondary {
+  background:#34c759;
+}
+.result {
+  font-size:18px;
+  font-weight:bold;
+}
+.green { color:#0a7d00; }
+.red { color:#c10000; }
+iframe {
+  width:100%;
+  height:260px;
+  border:none;
+  border-radius:12px;
+}
 </style>
 </head>
+
 <body>
 
 <h1>🚕 Taxi kalkulačka</h1>
 
 <div class="card">
   <label>Poloha vozidla (GPS alebo ručne)</label>
-  <input id="vehicleLat" placeholder="Zadajte lat" type="number" step="any">
-  <input id="vehicleLon" placeholder="Zadajte lon" type="number" step="any">
+  <input id="vehLat" placeholder="Latitude" type="number" step="any">
+  <input id="vehLon" placeholder="Longitude" type="number" step="any">
   <button onclick="loadGPS()">📍 Načítať GPS</button>
 
   <label>Miesto nástupu klienta</label>
@@ -34,138 +71,159 @@ iframe{width:100%;height:260px;border:none;border-radius:12px;}
   <input id="endAddr" placeholder="Ulica, mesto">
 
   <label>Cena z cenníka (€)</label>
-  <input id="priceCennik" placeholder="Zadajte cenu z cenníka">
-  
-  <button onclick="calculate()">Vypočítať trasu</button>
+  <input id="priceInput" placeholder="Zadajte cenu">
+
+  <button class="secondary" onclick="calculate()">Vypočítať</button>
 </div>
 
 <iframe id="map" src="https://www.openstreetmap.org/export/embed.html?layer=mapnik"></iframe>
 
 <div class="card result" id="result">
-  Čakanie na údaje…
+  Pripravené na výpočet
 </div>
 
 <script>
+/* ================== KONŠTANTY ================== */
 const COST_RATE = 0.31;
-let vehicle=null;
+const GEO_CACHE_TTL = 24 * 60 * 60 * 1000;
 
-// ===== GPS s timeout, high accuracy a fallback =====
+/* ================== CACHE ================== */
+const geoCache = {};
+let vehicleCoords = null;
+
+/* ================== GPS ================== */
 function loadGPS(){
   if(!navigator.geolocation){
-    alert("Vaše zariadenie nepodporuje GPS. Zadajte súradnice ručne.");
+    alert("GPS nie je podporované.");
     return;
   }
-  document.getElementById("result").innerText = "Načítavam GPS…";
+  result.textContent = "Načítavam GPS…";
   navigator.geolocation.getCurrentPosition(
     pos => {
-      vehicle = {lat: pos.coords.latitude, lon: pos.coords.longitude};
-      document.getElementById("vehicleLat").value = vehicle.lat;
-      document.getElementById("vehicleLon").value = vehicle.lon;
-      document.getElementById("result").innerText = "GPS načítané";
-      updateMap(vehicle.lat, vehicle.lon);
+      vehicleCoords = {
+        lat: pos.coords.latitude,
+        lon: pos.coords.longitude
+      };
+      vehLat.value = vehicleCoords.lat;
+      vehLon.value = vehicleCoords.lon;
+      updateMap(vehicleCoords.lat, vehicleCoords.lon);
+      result.textContent = "GPS načítané";
     },
     err => {
-      alert("Nepodarilo sa načítať GPS: " + err.message + ". Zadajte súradnice ručne alebo skúste GPS znovu.");
-      document.getElementById("result").innerText = "Zadajte súradnice ručne alebo použite GPS znovu.";
+      result.textContent = "GPS zlyhalo – zadajte súradnice ručne";
     },
-    {enableHighAccuracy:true, timeout:15000, maximumAge:0}
+    { enableHighAccuracy:true, timeout:15000, maximumAge:0 }
   );
 }
 
-// ===== Získanie súradníc vozidla =====
-function getVehicleCoords(){
-  const lat = parseFloat(document.getElementById("vehicleLat").value);
-  const lon = parseFloat(document.getElementById("vehicleLon").value);
-  if(!isNaN(lat) && !isNaN(lon)) return {lat, lon};
-  if(vehicle) return vehicle;
-  return null;
-}
+/* ================== GEOCODING ================== */
+async function geocodeAddress(address, retries = 2){
+  if(!address || address.length < 3)
+    throw "Neplatná adresa";
 
-// ===== GEOCODING =====
-async function geocode(address){
-  if(!address) throw "Prázdna adresa";
-  try{
-    const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`);
-    const j = await r.json();
-    if(!j.length) throw "Adresa nenájdená";
-    return {lat:+j[0].lat, lon:+j[0].lon};
+  const now = Date.now();
+  if(geoCache[address] && (now - geoCache[address].time) < GEO_CACHE_TTL)
+    return geoCache[address].coords;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(address)}`,
+      {
+        signal: controller.signal,
+        headers:{
+          "Accept":"application/json",
+          "User-Agent":"TaxiKalkulacka/1.0"
+        }
+      }
+    );
+
+    if(!res.ok) throw "HTTP chyba";
+
+    const data = await res.json();
+    if(!data.length) throw "Adresa nenájdená";
+
+    const coords = {
+      lat: parseFloat(data[0].lat),
+      lon: parseFloat(data[0].lon)
+    };
+
+    geoCache[address] = { coords, time: now };
+    return coords;
+
   } catch(err){
-    throw "Chyba geokódovania: " + err;
+    if(retries > 0){
+      await new Promise(r => setTimeout(r, 800));
+      return geocodeAddress(address, retries - 1);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
-// ===== MAPA =====
+/* ================== TRASA ================== */
+async function routeKm(aLat,aLon,bLat,bLon){
+  const res = await fetch(
+    `https://router.project-osrm.org/route/v1/driving/${aLon},${aLat};${bLon},${bLat}?overview=false`
+  );
+  const data = await res.json();
+  if(!data.routes || !data.routes.length)
+    throw "Trasa nenájdená";
+  return data.routes[0].distance / 1000;
+}
+
+/* ================== MAPA ================== */
 function updateMap(lat,lon){
-  map.src = `https://www.openstreetmap.org/export/embed.html?bbox=${lon-0.02},${lat-0.02},${lon+0.02},${lat+0.02}&layer=mapnik&marker=${lat},${lon}`;
+  map.src =
+    `https://www.openstreetmap.org/export/embed.html?` +
+    `bbox=${lon-0.02},${lat-0.02},${lon+0.02},${lat+0.02}` +
+    `&layer=mapnik&marker=${lat},${lon}`;
 }
 
-// ===== TRASA =====
-async function routeKm(a,b,c,d){
-  try{
-    const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${b},${a};${d},${c}?overview=false`);
-    const j = await r.json();
-    if(!j.routes || !j.routes[0]) throw "Trasa nenájdená";
-    return j.routes[0].distance/1000;
-  } catch(err){
-    throw "Chyba trasy: " + err;
-  }
-}
-
-// ===== VÝPOČET =====
+/* ================== HLAVNÝ VÝPOČET ================== */
 async function calculate(){
-  try{
-    const vehicleCoords = getVehicleCoords();
-    if(!vehicleCoords){
-      document.getElementById("result").innerText = "Zadajte polohu vozidla (GPS alebo ručne)";
-      return;
-    }
-    const startVal = document.getElementById("startAddr").value.trim();
-    const endVal   = document.getElementById("endAddr").value.trim();
-    const priceCennik = parseFloat(document.getElementById("priceCennik").value);
+  try {
+    result.textContent = "Počítam…";
 
-    if(!startVal || !endVal){
-      document.getElementById("result").innerText = "Zadajte adresy nástupu a cieľa";
-      return;
-    }
-    if(isNaN(priceCennik)){
-      document.getElementById("result").innerText = "Zadajte platnú cenu z cenníka";
-      return;
-    }
+    const vLat = parseFloat(vehLat.value);
+    const vLon = parseFloat(vehLon.value);
+    if(isNaN(vLat) || isNaN(vLon))
+      throw "Chýba poloha vozidla";
 
-    document.getElementById("result").innerText = "Načítavam trasu…";
+    const price = parseFloat(priceInput.value);
+    if(isNaN(price))
+      throw "Chýba cena z cenníka";
 
-    // geokódovanie
-    let start, end;
-    try { start = await geocode(startVal); } 
-    catch(err){ document.getElementById("result").innerText = "Chyba geokódovania štartu: "+err; return; }
-    try { end = await geocode(endVal); } 
-    catch(err){ document.getElementById("result").innerText = "Chyba geokódovania cieľa: "+err; return; }
+    const start = await geocodeAddress(startAddr.value);
+    const end   = await geocodeAddress(endAddr.value);
 
-    // trasa
-    let kmPickup, kmRide;
-    try { kmPickup = await routeKm(vehicleCoords.lat, vehicleCoords.lon, start.lat, start.lon); }
-    catch(err){ document.getElementById("result").innerText = "Chyba trasy na nástup: "+err; return; }
-    try { kmRide = await routeKm(start.lat, start.lon, end.lat, end.lon); }
-    catch(err){ document.getElementById("result").innerText = "Chyba trasy jazdy: "+err; return; }
+    const km1 = await routeKm(vLat, vLon, start.lat, start.lon);
+    const km2 = await routeKm(start.lat, start.lon, end.lat, end.lon);
 
-    const costs = (kmPickup + kmRide) * COST_RATE;
-    const profit = priceCennik - costs;
+    const costs = (km1 + km2) * COST_RATE;
+    const diff = price - costs;
 
-    document.getElementById("result").innerHTML=`
+    result.innerHTML = `
       Náklady: ${costs.toFixed(2)} €<br>
-      Cena z cenníka: ${priceCennik.toFixed(2)} €<br>
-      Zisk / Strata: ${profit.toFixed(2)} €
+      Cena z cenníka: ${price.toFixed(2)} €<br>
+      Výsledok: ${diff.toFixed(2)} €
     `;
-    document.getElementById("result").className = "card result " + (profit>=0?"green":"red");
+    result.className = "card result " + (diff >= 0 ? "green" : "red");
 
-    updateMap((vehicleCoords.lat + start.lat + end.lat)/3, (vehicleCoords.lon + start.lon + end.lon)/3);
+    updateMap(
+      (vLat + start.lat + end.lat) / 3,
+      (vLon + start.lon + end.lon) / 3
+    );
 
   } catch(err){
-    console.log(err);
-    document.getElementById("result").innerText = "Neočakovaná chyba: "+err;
-    document.getElementById("result").className="card result red";
+    result.textContent = "Chyba: " + err;
+    result.className = "card result red";
   }
 }
 </script>
+
 </body>
 </html>
