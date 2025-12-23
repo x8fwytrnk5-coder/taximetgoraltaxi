@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Taxi – kalkulačka & taxameter</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.5/dist/leaflet.css"/>
+
+<style>
+body {
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  margin:0;
+  background:#f2f2f2;
+  padding:12px;
+}
+h1 { text-align:center; margin-bottom:10px; }
+
+.card {
+  background:#fff;
+  padding:14px;
+  border-radius:12px;
+  margin-bottom:12px;
+}
+
+label {
+  font-weight:600;
+  display:block;
+  margin-top:10px;
+}
+
+input, button {
+  width:100%;
+  padding:12px;
+  font-size:16px;
+  margin-top:6px;
+}
+
+button {
+  background:#007aff;
+  color:#fff;
+  border:none;
+  border-radius:10px;
+}
+
+#map {
+  height:320px;
+  border-radius:12px;
+  margin-bottom:12px;
+}
+
+.result {
+  font-size:18px;
+  font-weight:bold;
+}
+.green { color:green; }
+.red { color:red; }
+</style>
+</head>
+
+<body>
+
+<h1>🚕 Taxi aplikácia</h1>
+
+<div class="card">
+  <label>Poloha vozidla</label>
+  <input id="vehiclePos" readonly placeholder="GPS nenačítané">
+  <button onclick="loadGPS()">📍 Načítať polohu vozidla</button>
+
+  <label>Nástup klienta</label>
+  <input id="startAddr" readonly placeholder="Klikni na mapu">
+
+  <label>Cieľ klienta</label>
+  <input id="endAddr" readonly placeholder="Klikni na mapu">
+
+  <label>Príplatky (€)</label>
+  <input type="number" id="extras" value="0" step="0.1">
+</div>
+
+<div id="map"></div>
+
+<div id="result" class="card result">
+  Čakanie na údaje…
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.5/dist/leaflet.js"></script>
+
+<script>
+/* ===== SKRYTÉ SADZBY (NEMENIŤ) ===== */
+const RATE_PICKUP = 0.31;
+const RATE_RIDE = 0.85;
+
+/* ===== ELEMENTY ===== */
+const vehicleInput = document.getElementById("vehiclePos");
+const startInput = document.getElementById("startAddr");
+const endInput = document.getElementById("endAddr");
+const extrasInput = document.getElementById("extras");
+const resultBox = document.getElementById("result");
+
+/* ===== MAPA ===== */
+const map = L.map("map").setView([48.1486, 17.1077], 13);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom:19
+}).addTo(map);
+
+let vehicleMarker = null;
+let startMarker = null;
+let endMarker = null;
+let routeLine = null;
+
+/* ===== GPS – iOS SAFE ===== */
+function loadGPS() {
+  if (!navigator.geolocation) {
+    alert("GPS nie je podporované");
+    return;
+  }
+
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      const lat = pos.coords.latitude;
+      const lon = pos.coords.longitude;
+
+      vehicleInput.value = lat.toFixed(6)+","+lon.toFixed(6);
+
+      if (!vehicleMarker) {
+        vehicleMarker = L.marker([lat, lon]).addTo(map).bindPopup("Vozidlo");
+      } else {
+        vehicleMarker.setLatLng([lat, lon]);
+      }
+
+      map.setView([lat, lon], 15);
+      calculate();
+    },
+    err => alert("GPS chyba: " + err.message),
+    { enableHighAccuracy:true }
+  );
+}
+
+/* ===== KLIKNUTIE NA MAPU ===== */
+map.on("click", e => {
+  const lat = e.latlng.lat;
+  const lon = e.latlng.lng;
+
+  if (!startMarker) {
+    startMarker = L.marker([lat, lon]).addTo(map).bindPopup("Nástup");
+    startInput.value = lat.toFixed(6)+","+lon.toFixed(6);
+  } else if (!endMarker) {
+    endMarker = L.marker([lat, lon]).addTo(map).bindPopup("Cieľ");
+    endInput.value = lat.toFixed(6)+","+lon.toFixed(6);
+  }
+
+  calculate();
+});
+
+/* ===== VZDIALENOSŤ (OSRM) ===== */
+async function getKm(a,b,c,d) {
+  const url = `https://router.project-osrm.org/route/v1/driving/${b},${a};${d},${c}?overview=false`;
+  const r = await fetch(url);
+  const j = await r.json();
+  return j.routes[0].distance / 1000;
+}
+
+/* ===== VÝPOČET ===== */
+async function calculate() {
+  if (!vehicleMarker || !startMarker || !endMarker) return;
+
+  const v = vehicleMarker.getLatLng();
+  const s = startMarker.getLatLng();
+  const e = endMarker.getLatLng();
+
+  const kmPickup = await getKm(v.lat,v.lng,s.lat,s.lng);
+  const kmRide = await getKm(s.lat,s.lng,e.lat,e.lng);
+
+  const extras = +extrasInput.value || 0;
+
+  const total =
+    kmPickup * RATE_PICKUP +
+    kmRide * RATE_RIDE +
+    extras;
+
+  resultBox.innerText =
+    `Cena / Náklady: ${total.toFixed(2)} €`;
+  resultBox.className = "card result green";
+
+  if (routeLine) map.removeLayer(routeLine);
+  routeLine = L.polyline(
+    [[v.lat,v.lng],[s.lat,s.lng],[e.lat,e.lng]],
+    { color:"blue" }
+  ).addTo(map);
+}
+</script>
+
+</body>
+</html>
