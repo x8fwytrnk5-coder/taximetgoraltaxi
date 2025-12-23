@@ -35,6 +35,8 @@ iframe{width:100%;height:260px;border:none;border-radius:12px;}
 
   <label>Cena z cenníka (€)</label>
   <input id="priceCennik" placeholder="Zadajte cenu z cenníka">
+  
+  <button onclick="calculate()">Vypočítať trasu</button>
 </div>
 
 <iframe id="map" src="https://www.openstreetmap.org/export/embed.html?layer=mapnik"></iframe>
@@ -53,7 +55,6 @@ function loadGPS(){
     alert("Vaše zariadenie nepodporuje GPS. Zadajte súradnice ručne.");
     return;
   }
-
   document.getElementById("result").innerText = "Načítavam GPS…";
   navigator.geolocation.getCurrentPosition(
     pos => {
@@ -62,7 +63,6 @@ function loadGPS(){
       document.getElementById("vehicleLon").value = vehicle.lon;
       document.getElementById("result").innerText = "GPS načítané";
       updateMap(vehicle.lat, vehicle.lon);
-      calculate();
     },
     err => {
       alert("Nepodarilo sa načítať GPS: " + err.message + ". Zadajte súradnice ručne alebo skúste GPS znovu.");
@@ -76,18 +76,15 @@ function loadGPS(){
 function getVehicleCoords(){
   const lat = parseFloat(document.getElementById("vehicleLat").value);
   const lon = parseFloat(document.getElementById("vehicleLon").value);
-  if(!isNaN(lat) && !isNaN(lon)){
-    return {lat, lon};
-  } else if(vehicle){
-    return vehicle;
-  }
+  if(!isNaN(lat) && !isNaN(lon)) return {lat, lon};
+  if(vehicle) return vehicle;
   return null;
 }
 
 // ===== GEOCODING =====
 async function geocode(address){
+  if(!address) throw "Prázdna adresa";
   try{
-    if(!address) throw "Prázdna adresa";
     const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`);
     const j = await r.json();
     if(!j.length) throw "Adresa nenájdená";
@@ -110,7 +107,7 @@ async function routeKm(a,b,c,d){
     if(!j.routes || !j.routes[0]) throw "Trasa nenájdená";
     return j.routes[0].distance/1000;
   } catch(err){
-    throw "Chyba OSRM: " + err;
+    throw "Chyba trasy: " + err;
   }
 }
 
@@ -122,7 +119,6 @@ async function calculate(){
       document.getElementById("result").innerText = "Zadajte polohu vozidla (GPS alebo ručne)";
       return;
     }
-
     const startVal = document.getElementById("startAddr").value.trim();
     const endVal   = document.getElementById("endAddr").value.trim();
     const priceCennik = parseFloat(document.getElementById("priceCennik").value);
@@ -136,11 +132,21 @@ async function calculate(){
       return;
     }
 
-    const start = await geocode(startVal);
-    const end   = await geocode(endVal);
+    document.getElementById("result").innerText = "Načítavam trasu…";
 
-    const kmPickup = await routeKm(vehicleCoords.lat, vehicleCoords.lon, start.lat, start.lon);
-    const kmRide   = await routeKm(start.lat, start.lon, end.lat, end.lon);
+    // geokódovanie
+    let start, end;
+    try { start = await geocode(startVal); } 
+    catch(err){ document.getElementById("result").innerText = "Chyba geokódovania štartu: "+err; return; }
+    try { end = await geocode(endVal); } 
+    catch(err){ document.getElementById("result").innerText = "Chyba geokódovania cieľa: "+err; return; }
+
+    // trasa
+    let kmPickup, kmRide;
+    try { kmPickup = await routeKm(vehicleCoords.lat, vehicleCoords.lon, start.lat, start.lon); }
+    catch(err){ document.getElementById("result").innerText = "Chyba trasy na nástup: "+err; return; }
+    try { kmRide = await routeKm(start.lat, start.lon, end.lat, end.lon); }
+    catch(err){ document.getElementById("result").innerText = "Chyba trasy jazdy: "+err; return; }
 
     const costs = (kmPickup + kmRide) * COST_RATE;
     const profit = priceCennik - costs;
@@ -150,25 +156,16 @@ async function calculate(){
       Cena z cenníka: ${priceCennik.toFixed(2)} €<br>
       Zisk / Strata: ${profit.toFixed(2)} €
     `;
-
     document.getElementById("result").className = "card result " + (profit>=0?"green":"red");
 
     updateMap((vehicleCoords.lat + start.lat + end.lat)/3, (vehicleCoords.lon + start.lon + end.lon)/3);
 
   } catch(err){
     console.log(err);
-    document.getElementById("result").innerText = "Chyba: " + err;
-    document.getElementById("result").className = "card result red";
+    document.getElementById("result").innerText = "Neočakovaná chyba: "+err;
+    document.getElementById("result").className="card result red";
   }
 }
-
-// ===== EVENTY =====
-document.getElementById("startAddr").oninput = calculate;
-document.getElementById("endAddr").oninput = calculate;
-document.getElementById("priceCennik").oninput = calculate;
-document.getElementById("vehicleLat").oninput = calculate;
-document.getElementById("vehicleLon").oninput = calculate;
-
 </script>
 </body>
 </html>
