@@ -32,6 +32,9 @@ iframe{width:100%;height:260px;border:none;border-radius:12px;}
 
   <label>Cieľ klienta</label>
   <input id="endAddr" placeholder="Ulica, mesto">
+
+  <label>Cena z cenníka (€)</label>
+  <input id="priceCennik" placeholder="Zadajte cenu z cenníka">
 </div>
 
 <iframe id="map" src="https://www.openstreetmap.org/export/embed.html?layer=mapnik"></iframe>
@@ -41,9 +44,7 @@ iframe{width:100%;height:260px;border:none;border-radius:12px;}
 </div>
 
 <script>
-/* === SADZBY (SKRYTÉ PRE VODIČA) === */
-const RATE_PICKUP = 0.31; // pristavenie / km
-const RATE_RIDE = 0.85; // jazda / km
+/* === SADZBY INTERNÉ (len náklady) === */
 const COST_RATE = 0.31; // náklady / km
 
 let vehicle=null, start=null, end=null;
@@ -80,22 +81,18 @@ async function routeKm(a,b,c,d){
 /* === VÝPOČET === */
 async function calculate(){
   if(!vehicle||!start||!end) return;
+  const cennikValue = parseFloat(document.getElementById("priceCennik").value);
+  if(isNaN(cennikValue)) return;
 
-  const kmPickup=await routeKm(vehicle.lat,vehicle.lon,start.lat,start.lon);
-  const kmRide=await routeKm(start.lat,start.lon,end.lat,end.lon);
+  const kmPickup = await routeKm(vehicle.lat,vehicle.lon,start.lat,start.lon);
+  const kmRide   = await routeKm(start.lat,start.lon,end.lat,end.lon);
 
-  const price = kmPickup*RATE_PICKUP + kmRide*RATE_RIDE;
-  const costs = (kmPickup + kmRide)*COST_RATE;
-
-  // cena z cenníka (napr. podľa aktuálneho cenníka)
-  const cennik = kmPickup*RATE_PICKUP + kmRide*RATE_RIDE;
-
-  const profit = cennik - costs;
+  const costs = (kmPickup + kmRide) * COST_RATE;
+  const profit = cennikValue - costs;
 
   result.innerHTML=`
-    Cena jazdy: ${price.toFixed(2)} €<br>
     Náklady: ${costs.toFixed(2)} €<br>
-    Cena z cenníka: ${cennik.toFixed(2)} €<br>
+    Cena z cenníka: ${cennikValue.toFixed(2)} €<br>
     Zisk / Strata: ${profit.toFixed(2)} €
   `;
 
@@ -103,21 +100,9 @@ async function calculate(){
 }
 
 /* === EVENTY === */
-startAddr.onchange=async()=>{
-  try{
-    start=await geocode(startAddr.value);
-    updateMap(start.lat,start.lon);
-    calculate();
-  }catch{alert("Nástup nenájdený");}
-};
-
-endAddr.onchange=async()=>{
-  try{
-    end=await geocode(endAddr.value);
-    updateMap(end.lat,end.lon);
-    calculate();
-  }catch{alert("Cieľ nenájdený");}
-};
+startAddr.onchange=calculate;
+endAddr.onchange=calculate;
+document.getElementById("priceCennik").onchange=calculate;
 </script>
 
 </body>
