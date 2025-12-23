@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Taxi kalkulačka (iPhone)</title>
+<title>Taxi kalkulačka</title>
 
 <style>
 body {
@@ -43,6 +43,7 @@ iframe {
   font-size:18px;
   font-weight:bold;
 }
+.green { color:green; }
 </style>
 </head>
 
@@ -55,15 +56,15 @@ iframe {
   <input id="vehicle" readonly placeholder="GPS nenačítané">
   <button onclick="loadGPS()">📍 Načítať polohu</button>
 
-  <label>Nástup klienta (súradnice)</label>
-  <input id="start" placeholder="napr. 48.15,17.11">
+  <label>Nástup klienta</label>
+  <input id="startAddr" placeholder="Ulica, mesto">
 
-  <label>Cieľ klienta (súradnice)</label>
-  <input id="end" placeholder="napr. 48.20,17.15">
+  <label>Cieľ klienta</label>
+  <input id="endAddr" placeholder="Ulica, mesto">
 </div>
 
 <iframe id="map"
-src="https://www.openstreetmap.org/export/embed.html?bbox=17.05,48.12,17.15,48.20&layer=mapnik">
+src="https://www.openstreetmap.org/export/embed.html?layer=mapnik">
 </iframe>
 
 <div id="result" class="card result">
@@ -74,36 +75,75 @@ src="https://www.openstreetmap.org/export/embed.html?bbox=17.05,48.12,17.15,48.2
 const RATE_PICKUP = 0.31;
 const RATE_RIDE = 0.85;
 
+let vehicleCoords = null;
+let startCoords = null;
+let endCoords = null;
+
+/* ===== GPS ===== */
 function loadGPS(){
   navigator.geolocation.getCurrentPosition(p=>{
-    vehicle.value=p.coords.latitude.toFixed(6)+","+p.coords.longitude.toFixed(6);
-    updateMap(p.coords.latitude,p.coords.longitude);
+    vehicleCoords = {
+      lat: p.coords.latitude,
+      lon: p.coords.longitude
+    };
+    vehicle.value = "Poloha načítaná";
+    updateMap(vehicleCoords.lat, vehicleCoords.lon);
   });
 }
 
-function updateMap(lat,lon){
-  map.src=`https://www.openstreetmap.org/export/embed.html?bbox=${lon-0.05},${lat-0.05},${lon+0.05},${lat+0.05}&layer=mapnik`;
+/* ===== GEOCODING (OSM NOMINATIM) ===== */
+async function geocode(addr){
+  const url =
+    `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addr)}`;
+  const r = await fetch(url);
+  const j = await r.json();
+  if(!j.length) throw "Adresa nenájdená";
+  return { lat:+j[0].lat, lon:+j[0].lon };
 }
 
+/* ===== MAPA ===== */
+function updateMap(lat,lon){
+  map.src =
+    `https://www.openstreetmap.org/export/embed.html?bbox=${lon-0.02},${lat-0.02},${lon+0.02},${lat+0.02}&layer=mapnik&marker=${lat},${lon}`;
+}
+
+/* ===== OSRM ===== */
 async function km(a,b,c,d){
-  const r=await fetch(`https://router.project-osrm.org/route/v1/driving/${b},${a};${d},${c}?overview=false`);
-  const j=await r.json();
+  const r = await fetch(
+    `https://router.project-osrm.org/route/v1/driving/${b},${a};${d},${c}?overview=false`
+  );
+  const j = await r.json();
   return j.routes[0].distance/1000;
 }
 
+/* ===== VÝPOČET ===== */
 async function calculate(){
-  const [vlat,vlon]=vehicle.value.split(",").map(Number);
-  const [slat,slon]=start.value.split(",").map(Number);
-  const [elat,elon]=end.value.split(",").map(Number);
+  if(!vehicleCoords || !startCoords || !endCoords) return;
 
-  const k1=await km(vlat,vlon,slat,slon);
-  const k2=await km(slat,slon,elat,elon);
+  const k1 = await km(vehicleCoords.lat, vehicleCoords.lon, startCoords.lat, startCoords.lon);
+  const k2 = await km(startCoords.lat, startCoords.lon, endCoords.lat, endCoords.lon);
 
-  const sum=k1*RATE_PICKUP+k2*RATE_RIDE;
-  result.innerText=`Cena / Náklady: ${sum.toFixed(2)} €`;
+  const sum = k1*RATE_PICKUP + k2*RATE_RIDE;
+  result.innerText = `Cena / Náklady: ${sum.toFixed(2)} €`;
+  result.className = "card result green";
 }
 
-start.onchange=end.onchange=calculate;
+/* ===== EVENTY ===== */
+startAddr.onchange = async ()=>{
+  try {
+    startCoords = await geocode(startAddr.value);
+    updateMap(startCoords.lat,startCoords.lon);
+    calculate();
+  } catch(e){ alert("Nástup: adresa nenájdená"); }
+};
+
+endAddr.onchange = async ()=>{
+  try {
+    endCoords = await geocode(endAddr.value);
+    updateMap(endCoords.lat,endCoords.lon);
+    calculate();
+  } catch(e){ alert("Cieľ: adresa nenájdená"); }
+};
 </script>
 
 </body>
